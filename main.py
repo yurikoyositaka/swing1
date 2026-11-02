@@ -4,22 +4,36 @@ import requests
 import json
 import os
 import datetime
+import jpholiday
+
+def get_topix500_tickers():
+    # JPX公式の銘柄一覧ExcelファイルのURL
+    url = "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls"
+    print("日本取引所グループ(JPX)から最新の銘柄一覧を取得中...")
+    df = pd.read_excel(url)
+    
+    # 時価総額・流動性が高い日本を代表する約500社（TOPIX 500）に絞り込む
+    target_sizes = ['TOPIX Core30', 'TOPIX Large70', 'TOPIX Mid400']
+    df_filtered = df[df['規模区分'].isin(target_sizes)]
+    
+    # yfinanceで読み込めるように銘柄コードの末尾に .T を付与
+    tickers = [f"{code}.T" for code in df_filtered['コード']]
+    print(f"監視対象として {len(tickers)} 銘柄を抽出しました。")
+    return tickers
 
 def screen_swing_candidates(tickers):
     matched_tickers = []
-    
+    # 500銘柄の処理には数分かかります
     for ticker in tickers:
         try:
-            # 1. 銘柄情報の取得と時価総額チェック
             stock = yf.Ticker(ticker)
             info = stock.info
             market_cap = info.get('marketCap', 0)
             
-            # 時価総額1,000億円（100,000,000,000円）未満ならスキップ
-            if market_cap < 50000000000:
+            # 安全のため、ここでも時価総額1,000億円未満を弾く
+            if market_cap < 100000000000:
                 continue
 
-            # 2. 日足データの取得とテクニカル計算
             df = stock.history(period="1y")
             if len(df) < 200:
                 continue
@@ -31,13 +45,11 @@ def screen_swing_candidates(tickers):
             latest = df.iloc[-1]
             prev = df.iloc[-2]
             
-            # 3. ミネルヴィニ的なブレイクアウト条件
             cond_long_trend = latest['Close'] > latest['SMA_200']
             cond_ema_break = (prev['Close'] <= prev['EMA_8']) and (latest['Close'] > latest['EMA_8'])
             cond_volume_surge = latest['Volume'] > latest['Vol_SMA_50'] * 1.5
             
             if cond_long_trend and cond_ema_break and cond_volume_surge:
-                # 時価総額を「億円」単位にして見やすくする
                 market_cap_oku = int(market_cap / 100000000)
                 matched_tickers.append({
                     'Ticker': ticker,
@@ -53,17 +65,15 @@ def screen_swing_candidates(tickers):
     return pd.DataFrame(matched_tickers)
 
 def send_discord_alert(df, webhook_url):
-    # ▼変更点：合致銘柄が0件の場合でも「該当なし」の通知を送る
     if df.empty:
         payload = {
-            "content": "📊 **本日のスイングトレード・スクリーニング結果**\n> 監視対象の中に、本日条件（200日SMA超え・8日EMA反発・出来高急増）を満たした銘柄はありませんでした。"
+            "content": "📊 **本日のスイングトレード・スクリーニング結果**\n> TOPIX 500の中で、本日条件を満たした銘柄はありませんでした。"
         }
         headers = {"Content-Type": "application/json"}
         requests.post(webhook_url, data=json.dumps(payload), headers=headers)
         print("Discordへ「該当なし」の通知を送信しました。")
         return
 
-    # ▼該当銘柄がある場合は詳細データを送る
     embeds = []
     for index, row in df.iterrows():
         embed = {
@@ -80,7 +90,7 @@ def send_discord_alert(df, webhook_url):
         embeds.append(embed)
 
     payload = {
-        "content": "📊 **スイングトレード条件合致シグナル**",
+        "content": "📊 **スイングトレード条件合致シグナル (TOPIX 500対象)**",
         "embeds": embeds
     }
     
@@ -90,8 +100,13 @@ def send_discord_alert(df, webhook_url):
 
 if __name__ == "__main__":
     today = datetime.date.today()
-    if today.weekday() >= 5:
-        print("本日は土日のため、処理をスキップします。")
+    
+    is_weekend = today.weekday() >= 5
+    is_holiday = jpholiday.is_holiday(today)
+    is_new_year = (today.month == 12 and today.day == 31) or (today.month == 1 and today.day in [1, 2, 3])
+    
+    if is_weekend or is_holiday or is_new_year:
+        print(f"{today} は東証の休場日（土日・祝日・年末年始）のため、処理をスキップします。")
         exit()
 
     WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
@@ -99,16 +114,9 @@ if __name__ == "__main__":
         print("エラー: DISCORD_WEBHOOK_URL が設定されていません。")
         exit()
 
-    # 監視対象（代表的な大型・中型株を多めにセットしています。自由に入れ替え可能です）
-    target_tickers = [
-        '7203.T', '8306.T', '6861.T', '8035.T', '9984.T',
-        '9983.T', '8316.T', '8766.T', '9432.T', '8058.T',
-        '7974.T', '4063.T', '6758.T', '8001.T', '8031.T',
-        '6098.T', '6981.T', '4568.T', '6501.T', '9433.T',
-        '8411.T', '7267.T', '7741.T', '6902.T', '8002.T',
-        '9503.T', '8803.T', '8593.T', '8591.T', '9022.T'
-    ] 
+    # ▼ 手動入力の銘柄リストを削除し、関数で自動取得するように変更 ▼
+    target_tickers = get_topix500_tickers()
     
-    print("スクリーニングを開始します...")
+    print("スクリーニングを開始します... (約500銘柄の処理には数分かかります)")
     result_df = screen_swing_candidates(target_tickers)
     send_discord_alert(result_df, WEBHOOK_URL)
