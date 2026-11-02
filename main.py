@@ -16,7 +16,7 @@ def screen_swing_candidates(tickers):
             market_cap = info.get('marketCap', 0)
             
             # 時価総額1,000億円（100,000,000,000円）未満ならスキップ
-            if market_cap < 100000000000:
+            if market_cap < 50000000000:
                 continue
 
             # 2. 日足データの取得とテクニカル計算
