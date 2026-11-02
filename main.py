@@ -5,32 +5,42 @@ import json
 import os
 import datetime
 import jpholiday
+import sys
+from bs4 import BeautifulSoup
 
 def get_topix500_tickers():
-    # JPX公式の銘柄一覧ExcelファイルのURL
-    url = "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls"
-    print("日本取引所グループ(JPX)から最新の銘柄一覧を取得中...")
-    df = pd.read_excel(url)
+    print("JPXのページから最新の銘柄一覧ファイルを探しています...")
+    base_url = "https://www.jpx.co.jp"
+    page_url = base_url + "/markets/statistics-equities/misc/01.html"
     
-    # 時価総額・流動性が高い日本を代表する約500社（TOPIX 500）に絞り込む
+    # ページから最新のExcelファイルのリンクを自動検索
+    res = requests.get(page_url)
+    soup = BeautifulSoup(res.text, 'html.parser')
+    link = soup.find('a', href=lambda x: x and x.endswith('data_j.xls'))
+    
+    if not link:
+        print("エラー: JPXのページから銘柄一覧ファイルが見つかりませんでした。")
+        sys.exit(1)
+        
+    excel_url = base_url + link['href']
+    print(f"最新のファイルURLを取得しました: {excel_url}")
+    
+    df = pd.read_excel(excel_url)
     target_sizes = ['TOPIX Core30', 'TOPIX Large70', 'TOPIX Mid400']
     df_filtered = df[df['規模区分'].isin(target_sizes)]
     
-    # yfinanceで読み込めるように銘柄コードの末尾に .T を付与
     tickers = [f"{code}.T" for code in df_filtered['コード']]
     print(f"監視対象として {len(tickers)} 銘柄を抽出しました。")
     return tickers
 
 def screen_swing_candidates(tickers):
     matched_tickers = []
-    # 500銘柄の処理には数分かかります
     for ticker in tickers:
         try:
             stock = yf.Ticker(ticker)
             info = stock.info
             market_cap = info.get('marketCap', 0)
             
-            # 安全のため、ここでも時価総額1,000億円未満を弾く
             if market_cap < 100000000000:
                 continue
 
@@ -107,14 +117,13 @@ if __name__ == "__main__":
     
     if is_weekend or is_holiday or is_new_year:
         print(f"{today} は東証の休場日（土日・祝日・年末年始）のため、処理をスキップします。")
-        exit()
+        sys.exit(0)
 
     WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
     if not WEBHOOK_URL:
         print("エラー: DISCORD_WEBHOOK_URL が設定されていません。")
-        exit()
+        sys.exit(1)
 
-    # ▼ 手動入力の銘柄リストを削除し、関数で自動取得するように変更 ▼
     target_tickers = get_topix500_tickers()
     
     print("スクリーニングを開始します... (約500銘柄の処理には数分かかります)")
