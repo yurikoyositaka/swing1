@@ -37,12 +37,9 @@ def get_topix500_tickers():
         link = soup.find('a', href=lambda x: x and ('data_j' in x or x.endswith('.xls') or x.endswith('.xlsx')))
         
         if not link:
-            print("警告: JPXのページから銘柄一覧ファイルが見つかりませんでした。代替30銘柄を使用します。")
             return fallback_tickers
             
         excel_url = base_url + link['href']
-        print(f"最新のファイルURLを取得しました: {excel_url}")
-        
         excel_res = requests.get(excel_url, headers=headers)
         df = pd.read_excel(excel_res.content)
         target_sizes = ['TOPIX Core30', 'TOPIX Large70', 'TOPIX Mid400']
@@ -54,10 +51,8 @@ def get_topix500_tickers():
             name = row['銘柄名']
             tickers[code] = name
             
-        print(f"監視対象として {len(tickers)} 銘柄を抽出しました。")
         return tickers
-    except Exception as e:
-        print(f"警告: Excelファイルの解析に失敗しました ({e})。代替30銘柄を使用します。")
+    except Exception:
         return fallback_tickers
 
 def screen_swing_candidates(tickers_dict):
@@ -88,9 +83,12 @@ def screen_swing_candidates(tickers_dict):
             
             if cond_long_trend and cond_ema_break and cond_volume_surge:
                 market_cap_oku = int(market_cap / 100000000)
+                sector = info.get('sector', '株式') # 業種を取得
+                
                 matched_tickers.append({
                     'Ticker': ticker,
                     'Name': name,
+                    'Sector': sector,
                     'Close': round(latest['Close'], 1),
                     'EMA_8': round(latest['EMA_8'], 1),
                     'SMA_200': round(latest['SMA_200'], 1),
@@ -109,26 +107,22 @@ def send_discord_alert(df, webhook_url):
         payload = {
             "content": "📊 **本日のスイングトレード・スクリーニング結果**\n> 監視対象の中で、本日条件を満たした銘柄はありませんでした。"
         }
-        res = requests.post(webhook_url, data=json.dumps(payload), headers=headers)
-        if res.status_code in [200, 204]:
-            print("✅ Discordへ「該当なし」の通知を正常送信しました。")
-        else:
-            print(f"❌ Discord送信エラー: {res.status_code} - {res.text}")
+        requests.post(webhook_url, data=json.dumps(payload), headers=headers)
         return
 
     embeds = []
     for index, row in df.iterrows():
+        code_num = row['Ticker'].split('.')[0]
+        
+        # 右側の参考デザインに合わせたDescriptionレイアウト
+        line1 = f"`{code_num}`  {row['Sector']}"
+        line2 = f"💰 **¥{row['Close']:,}** ({row['MarketCap']}億円)   📈 **出来高 {row['Volume_Ratio']}倍**   📊 **8EMA** ¥{row['EMA_8']} / **200SMA** ¥{row['SMA_200']}"
+        
         embed = {
-            "title": f"📈 ブレイクアウト検出: {row['Ticker']} {row['Name']}",
+            "title": f"{index + 1}. {row['Name']}",
             "url": f"https://finance.yahoo.co.jp/quote/{row['Ticker']}",
-            "color": 3066993,
-            "fields": [
-                {"name": "終値", "value": f"¥{row['Close']}", "inline": True},
-                {"name": "時価総額", "value": f"{row['MarketCap']}億円", "inline": True},
-                {"name": "出来高急増率", "value": f"{row['Volume_Ratio']}倍", "inline": True},
-                {"name": "8日EMA", "value": f"¥{row['EMA_8']}", "inline": True},
-                {"name": "200日SMA", "value": f"¥{row['SMA_200']}", "inline": True}
-            ]
+            "description": f"{line1}\n{line2}",
+            "color": 3066993, # 緑色のサイドバー
         }
         embeds.append(embed)
 
@@ -139,7 +133,7 @@ def send_discord_alert(df, webhook_url):
     
     res = requests.post(webhook_url, data=json.dumps(payload), headers=headers)
     if res.status_code in [200, 204]:
-        print("✅ Discordへシグナル通知を正常送信しました。")
+        print("✅ Discordへ送信成功しました。")
     else:
         print(f"❌ Discord送信エラー: {res.status_code} - {res.text}")
 
@@ -160,7 +154,5 @@ if __name__ == "__main__":
         sys.exit(1)
 
     target_tickers = get_topix500_tickers()
-    
-    print("スクリーニングを開始します...")
     result_df = screen_swing_candidates(target_tickers)
     send_discord_alert(result_df, WEBHOOK_URL)
