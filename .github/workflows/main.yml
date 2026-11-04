@@ -2,34 +2,31 @@ name: Daily Stock Screener
 
 on:
   schedule:
-    # 日本時間の平日16:00に実行 (UTC時間で指定するため 7:00)
+    # 日本時間 平日 16:00 実行 (UTC 07:00)
     - cron: '0 7 * * 1-5'
-  workflow_dispatch: # 手動実行ボタンを有効化
+  workflow_dispatch:
 
 jobs:
   run-screener:
     runs-on: ubuntu-latest
     env:
-      # 日本の祝日判定を正しく行うためタイムゾーンをJSTに設定
-      TZ: 'Asia/Tokyo' 
+      TZ: 'Asia/Tokyo'
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
       - name: Install dependencies
-        # openpyxl は pandas でExcelファイルを読み込むために必須です
         run: |
           python -m pip install --upgrade pip
           pip install yfinance pandas requests jpholiday beautifulsoup4 openpyxl
 
       - name: Run screener script
         env:
-          # ステップ2で登録したSecretsを環境変数として渡す
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: python main.py # ※ファイル名は実際のPythonファイル名に合わせてください
+        run: python main.py
